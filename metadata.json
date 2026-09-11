@@ -1,0 +1,6 @@
+{
+  "name": "QurbaniHat",
+  "description": "Livestock Booking Platform — Browse, filter, and book verified Qurbani cows and goats.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
