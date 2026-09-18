@@ -97,8 +97,19 @@ export default async function RootLayout({
   const session = (await getServerSession()) as SessionBundle | null;
 
   return (
-    <html lang="en" className={`${inter.variable} ${marcellus.variable}`}>
-      <body className="flex min-h-screen flex-col bg-cream text-ink">
+    // suppressHydrationWarning: browser extensions (e.g. password managers,
+    // Demoway, Grammarly) inject attributes on <html>/<body> before React
+    // hydrates, which otherwise triggers a false "attributes didn't match"
+    // hydration error on every route.
+    <html
+      lang="en"
+      className={`${inter.variable} ${marcellus.variable}`}
+      suppressHydrationWarning
+    >
+      <body
+        className="flex min-h-screen flex-col bg-cream text-ink"
+        suppressHydrationWarning
+      >
         <Providers initialSession={session}>
           <Navbar />
           <main className="flex-1">{children}</main>

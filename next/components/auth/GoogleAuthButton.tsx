@@ -18,10 +18,13 @@ import { friendlyAuthError, GOOGLE_NOT_CONFIGURED_MESSAGE } from "@/lib/auth-err
  */
 export function GoogleAuthButton({
   callbackPath = "/",
+  errorCallbackPath,
   googleEnabled = true,
   label = "Continue with Google",
 }: {
   callbackPath?: string;
+  /** Where a failed OAuth callback redirects (Better Auth appends ?error=code). */
+  errorCallbackPath?: string;
   googleEnabled?: boolean;
   label?: string;
 }) {
@@ -42,6 +45,9 @@ export function GoogleAuthButton({
       const { error } = await authClient.signIn.social({
         provider: "google",
         callbackURL,
+        ...(errorCallbackPath
+          ? { errorCallbackURL: `${window.location.origin}${errorCallbackPath}` }
+          : {}),
       });
 
       if (error) {

@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { AuthShell } from "@/components/auth/AuthShell";
 import { LoginForm } from "@/components/auth/LoginForm";
+import { OAuthErrorNotice } from "@/components/auth/OAuthErrorNotice";
 import { isGoogleProviderConfigured } from "@/lib/auth-flags";
+import { getServerSession } from "@/lib/session";
 import { safeRedirectPath } from "@/lib/utils";
+import type { SessionBundle } from "@/types";
 
 export const metadata: Metadata = {
   title: "Login",
@@ -19,6 +24,13 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ redirect?: string }>;
 }) {
+  // Requirement: authenticated users never see /login — they are sent home.
+  // Checked with the authoritative server session, not just the cookie.
+  const session = (await getServerSession()) as SessionBundle | null;
+  if (session?.user) {
+    redirect("/");
+  }
+
   const params = await searchParams;
   const redirectTo = safeRedirectPath(params?.redirect, "/");
 
@@ -38,6 +50,9 @@ export default async function LoginPage({
     >
       {/* The Google flag is resolved on the server (GOOGLE_CLIENT_ID is not a
           NEXT_PUBLIC_ variable) and passed down as a prop. */}
+      <Suspense fallback={null}>
+        <OAuthErrorNotice />
+      </Suspense>
       <LoginForm redirectTo={redirectTo} googleEnabled={isGoogleProviderConfigured} />
     </AuthShell>
   );

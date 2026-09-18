@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { AnimalDetails } from "@/components/animals/AnimalDetails";
 import { BookingForm } from "@/components/booking/BookingForm";
+import { SignInToBook } from "@/components/booking/SignInToBook";
 import { getAnimalById } from "@/lib/animals";
 import { getServerSession } from "@/lib/session";
 import type { SessionBundle } from "@/types";
@@ -45,19 +46,24 @@ export default async function AnimalDetailsPage({ params }: DetailsPageProps) {
   // Invalid id (unknown, non-numeric, path traversal attempts) -> custom 404.
   if (!animal) notFound();
 
-  // proxy.ts already redirects signed-out visitors; this is the real check so
-  // the page renders correctly even if the proxy is bypassed.
+  // proxy.ts does NOT gate this page — animal browsing is public. The session
+  // decides which booking UI renders, so the gate is enforced on the server and
+  // cannot be bypassed by manipulating client state.
   const session = (await getServerSession()) as SessionBundle | null;
 
   return (
     <section className="section">
       <div className="container-page space-y-14">
         <AnimalDetails animal={animal} />
-        <BookingForm
-          animal={animal}
-          defaultName={session?.user?.name ?? ""}
-          defaultEmail={session?.user?.email ?? ""}
-        />
+        {session?.user ? (
+          <BookingForm
+            animal={animal}
+            defaultName={session.user.name ?? ""}
+            defaultEmail={session.user.email ?? ""}
+          />
+        ) : (
+          <SignInToBook animalId={animal.id} animalName={animal.name} />
+        )}
       </div>
     </section>
   );

@@ -22,3 +22,5 @@ npm-debug.log*
 
 # Local logs (dev server / build output captures)
 *.log
+.vercel
+.env*

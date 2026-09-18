@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { AuthShell } from "@/components/auth/AuthShell";
+import { OAuthErrorNotice } from "@/components/auth/OAuthErrorNotice";
 import { RegisterForm } from "@/components/auth/RegisterForm";
 import { isGoogleProviderConfigured } from "@/lib/auth-flags";
+import { getServerSession } from "@/lib/session";
+import type { SessionBundle } from "@/types";
 
 export const metadata: Metadata = {
   title: "Register",
@@ -13,7 +18,13 @@ export const metadata: Metadata = {
   robots: { index: false, follow: true },
 };
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  // Requirement: authenticated users never see /register — they are sent home.
+  const session = (await getServerSession()) as SessionBundle | null;
+  if (session?.user) {
+    redirect("/");
+  }
+
   return (
     <AuthShell
       eyebrow="Create your account"
@@ -30,6 +41,9 @@ export default function RegisterPage() {
     >
       {/* The Google flag is resolved on the server (GOOGLE_CLIENT_ID is not a
           NEXT_PUBLIC_ variable) and passed down as a prop. */}
+      <Suspense fallback={null}>
+        <OAuthErrorNotice />
+      </Suspense>
       <RegisterForm googleEnabled={isGoogleProviderConfigured} />
     </AuthShell>
   );

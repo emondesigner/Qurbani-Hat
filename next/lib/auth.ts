@@ -44,6 +44,19 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // refresh the cookie once per day
   },
+  account: {
+    accountLinking: {
+      // Allow a Google sign-in to be linked to an existing email/password
+      // account. Without this, Better Auth refuses to merge the identities and
+      // redirects back with an `account_not_linked` error when the email used
+      // on Google matches a registered user.
+      enabled: true,
+      // Google is a "trusted" provider: it always returns a verified email, so
+      // linking happens silently without an extra confirmation step. New Google
+      // users still get a fresh account — registration behaviour is unchanged.
+      trustedProviders: ["google"],
+    },
+  },
   // Must be the last plugin: lets Better Auth write cookies through Next.js.
   plugins: [nextCookies()],
 });

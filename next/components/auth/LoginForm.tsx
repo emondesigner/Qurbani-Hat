@@ -147,7 +147,11 @@ export function LoginForm({
         <span className="h-px flex-1 bg-emerald-deep/12" />
       </div>
 
-      <GoogleAuthButton callbackPath={target} googleEnabled={googleEnabled} />
+      <GoogleAuthButton
+        callbackPath={target}
+        errorCallbackPath="/login"
+        googleEnabled={googleEnabled}
+      />
 
       <p className="flex items-center gap-2 text-xs text-ink-soft">
         <Lock className="h-3.5 w-3.5 text-brand" aria-hidden="true" />

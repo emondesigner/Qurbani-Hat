@@ -18,6 +18,8 @@ const CODE_MESSAGES: Record<string, string> = {
   PROVIDER_NOT_FOUND: "This sign-in provider is not configured for QurbaniHat.",
   FAILED_TO_CREATE_USER: "We could not create your account. Please try again.",
   FAILED_TO_CREATE_SESSION: "We could not start your session. Please try again.",
+  ACCOUNT_NOT_LINKED:
+    "This email is already registered with a password. Please log in with your email and password instead.",
 };
 
 const MESSAGE_HINTS: { match: RegExp; message: string }[] = [
@@ -71,11 +73,7 @@ export function friendlyAuthError(error: unknown, fallback: string): string {
 }
 
 /** True when the deployment has Google OAuth credentials configured. */
-export function isGoogleAuthEnabled(): boolean {
-  return Boolean(
-    process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim(),
-  );
-}
+// (Single source of truth for this flag lives in lib/auth-flags.ts.)
 
 export const GOOGLE_NOT_CONFIGURED_MESSAGE =
   "Google sign-in is not configured on this deployment yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the environment variables and try again.";

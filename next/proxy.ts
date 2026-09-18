@@ -9,8 +9,12 @@ import { getSessionCookie } from "better-auth/cookies";
  * protected page is rendered. It is NOT the security boundary — every
  * protected page and API route re-validates the session server-side with
  * `auth.api.getSession()` (see lib/session.ts).
+ *
+ * Note: /details-page/[id] is deliberately PUBLIC. Anyone may browse an animal,
+ * but the booking form on that page is gated server-side (see
+ * components/booking/SignInToBook.tsx and app/details-page/[id]/page.tsx).
  */
-const PROTECTED_PREFIXES = ["/my-profile", "/details-page"];
+const PROTECTED_PREFIXES = ["/my-profile"];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
@@ -32,5 +36,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/my-profile", "/my-profile/:path*", "/details-page/:path*"],
+  matcher: ["/my-profile", "/my-profile/:path*"],
 };

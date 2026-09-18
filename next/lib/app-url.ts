@@ -119,6 +119,11 @@ export function resolveBrowserBaseUrl(): string | undefined {
  * Origins allowed to call `/api/auth/*` (CSRF protection).
  * Always includes the resolved public origin plus the canonical local pairs, so
  * `localhost` and `127.0.0.1` both work during development.
+ *
+ * Vercel preview deployments live on a random subdomain (`<hash>.vercel.app`),
+ * so the per-deployment VERCEL_URL and the project production domain are
+ * always trusted as well — otherwise OAuth callbacks would fail the origin
+ * check on every preview URL.
  */
 export function buildTrustedOrigins(): string[] {
   const resolved = resolveServerBaseUrl();
@@ -138,6 +143,15 @@ export function buildTrustedOrigins(): string[] {
 
   origins.add("http://localhost:3000");
   origins.add("http://127.0.0.1:3000");
+
+  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (production) {
+    origins.add(`https://${production.replace(/^https?:\/\//, "").replace(/\/+$/, "")}`);
+  }
+  const preview = process.env.VERCEL_URL?.trim();
+  if (preview) {
+    origins.add(`https://${preview.replace(/^https?:\/\//, "").replace(/\/+$/, "")}`);
+  }
 
   return Array.from(origins);
 }

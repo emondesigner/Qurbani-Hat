@@ -212,7 +212,7 @@ export function RegisterForm({ googleEnabled = true }: { googleEnabled?: boolean
         <span className="h-px flex-1 bg-emerald-deep/12" />
       </div>
 
-      <GoogleAuthButton googleEnabled={googleEnabled} />
+      <GoogleAuthButton googleEnabled={googleEnabled} errorCallbackPath="/register" />
 
       <p className="flex items-center gap-2 text-xs text-ink-soft">
         <ShieldCheck className="h-3.5 w-3.5 text-brand" aria-hidden="true" />
