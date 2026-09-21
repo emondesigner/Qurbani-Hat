@@ -29,7 +29,8 @@ const DEFAULT_DB = "qurbanihat";
 /** Fail fast: a serverless request must never hang while Atlas is unreachable. */
 const SERVER_SELECTION_TIMEOUT_MS = 5000;
 const CONNECT_TIMEOUT_MS = 5000;
-const MAX_POOL_SIZE = 10;
+const MAX_POOL_SIZE = 5;
+const MIN_POOL_SIZE = 0;
 const MAX_IDLE_TIME_MS = 30_000;
 const HEALTH_TIMEOUT_MS = 6000;
 const HEALTH_CACHE_MS = 15_000;
@@ -50,6 +51,36 @@ function readUri(): string | undefined {
  */
 export function isDatabaseConfigured(): boolean {
   return readUri() !== undefined;
+}
+
+/**
+ * True when a failure means the cached client is permanently unusable and must
+ * be discarded so the next attempt builds a fresh pool (Next.js 16 / Vercel:
+ * a failed cold start closes the topology and it never reopens on its own).
+ */
+function isStaleClientFailure(error: unknown): boolean {
+  const reason = redactSecrets(
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : typeof error === "object" && error !== null && "message" in error
+        ? String((error as { message: unknown }).message)
+        : String(error),
+  );
+  return /topology (is closed|was destroyed|is closing)|topologyclosederror|client must be connected before running operations|mongoClientClosedError/i.test(
+    reason,
+  );
+}
+
+/** Discards the cached client so the next call builds a brand-new pool. */
+let healthCache: { at: number; status: DatabaseStatus } | null = null;
+
+export function resetMongoClient(): void {
+  healthCache = null;
+  const cached = global.__qurbaniHatMongoClient__;
+  global.__qurbaniHatMongoClient__ = undefined;
+  if (cached) {
+    cached.close(true).catch(() => {});
+  }
 }
 
 /** Database Better Auth stores its collections in. */
@@ -106,6 +137,16 @@ export type DatabaseFailureKind =
   | "invalid-uri"
   | "timeout"
   | "unknown";
+
+/**
+ * What a failing *cold start* looks like on Vercel:
+ *   1st request on a fresh instance -> MongoServerSelectionError => `unreachable`
+ *      (TCP/TLS to Atlas failed: IP blocked, wrong password, paused cluster...).
+ *   Later requests on the SAME instance -> MongoTopologyClosedError =>
+ *      `topology-closed` (the driver closed the pool after that first failure;
+ *      NOT a new problem). Fix the *original* failure, then redeploy so Vercel
+ *      throws the poisoned instance away.
+ */
 
 /** Maps a driver error onto a short, credential-free explanation. */
 export function describeMongoFailure(error: unknown): {
@@ -180,9 +221,13 @@ export function getMongoClient(): MongoClient {
     }
 
     global.__qurbaniHatMongoClient__ = new MongoClient(uri ?? FALLBACK_URI, {
-      // Serverless-friendly pool: reuse connections for the life of the
-      // instance without holding more open than necessary.
+      // Vercel/Next.js 16 serverless tuning:
+      //  - maxPoolSize 5 keeps the per-instance connection count small so a fleet
+      //    of short-lived functions cannot exhaust the Atlas connection limit.
+      //  - minPoolSize 0 lets an idle instance release every socket instead of
+      //    holding dead ones that later fail server selection on cold start.
       maxPoolSize: MAX_POOL_SIZE,
+      minPoolSize: MIN_POOL_SIZE,
       maxIdleTimeMS: MAX_IDLE_TIME_MS,
       serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS,
       connectTimeoutMS: CONNECT_TIMEOUT_MS,
@@ -206,10 +251,16 @@ export interface DatabaseStatus {
   detail: string;
 }
 
-let healthCache: { at: number; status: DatabaseStatus } | null = null;
-
 /**
  * Pings MongoDB and returns a safe summary of the result.
+ *
+ * A failed cold start on Vercel leaves the cached client's topology permanently
+ * closed: without a reset every later attempt would report the stale
+ * `topology-closed` error instead of trying again, so one transient network
+ * blip would disable auth for the lifetime of the server instance. When the
+ * pool is stale it is discarded, one fresh-client retry is attempted, and only
+ * the retry's outcome is reported — the Vercel logs therefore show exactly
+ * whether the database is reachable *now*.
  *
  * Results are cached briefly so the check can run on the auth hot path
  * (lib/auth-guard.ts) without adding a database round trip to every request.
@@ -237,29 +288,49 @@ export async function getDatabaseStatus(force = false): Promise<DatabaseStatus> 
     return status;
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let status: DatabaseStatus;
+  const attempt = async (): Promise<DatabaseStatus> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let status: DatabaseStatus;
 
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("MongoNetworkTimeoutError: health check timed out")),
-        HEALTH_TIMEOUT_MS,
-      );
-    });
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("MongoNetworkTimeoutError: health check timed out")),
+          HEALTH_TIMEOUT_MS,
+        );
+      });
 
-    const ping = getMongoClient()
-      .db(base.database)
-      .command({ ping: 1 });
+      const ping = getMongoClient()
+        .db(base.database)
+        .command({ ping: 1 });
 
-    await Promise.race([ping, timeout]);
-    status = { ...base, reachable: true, kind: "ok", detail: "ok" };
-  } catch (error) {
-    const { kind, detail } = describeMongoFailure(error);
-    status = { ...base, reachable: false, kind, detail };
-  } finally {
-    if (timer) clearTimeout(timer);
+      await Promise.race([ping, timeout]);
+      status = { ...base, reachable: true, kind: "ok", detail: "ok" };
+    } catch (error) {
+      const { kind, detail } = describeMongoFailure(error);
+      status = { ...base, reachable: false, kind, detail };
+      (status as { _staleClient?: boolean })._staleClient = isStaleClientFailure(error);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    return status;
+  };
+
+  let status = await attempt();
+  if (
+    !status.reachable &&
+    (status as { _staleClient?: boolean })._staleClient
+  ) {
+    // Cold-start poison: the cached pool can never recover, so drop it and
+    // retry once with a brand-new client before reporting anything.
+    console.warn(
+      `[QurbaniHat] Discarding stale MongoDB client (${status.kind}) and retrying with a fresh pool against ${base.target}.`,
+    );
+    resetMongoClient();
+    status = await attempt();
   }
+  delete (status as { _staleClient?: boolean })._staleClient;
 
   healthCache = { at: Date.now(), status };
   return status;
