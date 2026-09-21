@@ -41,6 +41,12 @@ export async function GET() {
         configured: database.configured,
         reachable: database.reachable,
         kind: database.kind,
+        // Credential-free identification of the target this deployment is
+        // pointed at, e.g. `cluster0.m2wttjg.mongodb.net/Qurbani-Hat`. Compare it
+        // with the cluster shown in Atlas; a mismatch means the MONGODB_URI set
+        // on the hosting dashboard is not the one you think it is.
+        target: database.target,
+        db: database.database,
         detail: database.detail,
       },
       betterAuth: {

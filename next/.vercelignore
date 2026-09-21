@@ -1,0 +1,14 @@
+# Never upload local environment files into a deployment's source snapshot.
+# Production values live in Vercel → Project → Settings → Environment Variables.
+# Vercel-injected variables take precedence over any .env file anyway, so this
+# is purely a "keep secrets off the wire" safeguard.
+.env
+.env.*
+*.pem
+*.log
+*.pid
+
+# Local build/test artifacts
+.next
+node_modules
+.vercel
