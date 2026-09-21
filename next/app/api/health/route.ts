@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolvePublicBaseUrl, resolveServerBaseUrl } from "@/lib/app-url";
 import { isGoogleProviderConfigured } from "@/lib/auth-flags";
+import { runConnectivityProbe, type ConnectivityProbe } from "@/lib/mongo-probe";
 import { getDatabaseStatus } from "@/lib/mongodb";
 
 /**
@@ -26,6 +27,8 @@ import { getDatabaseStatus } from "@/lib/mongodb";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** The staged probe can take a few seconds when the database is unreachable. */
+export const maxDuration = 30;
 
 /** Better Auth's Google callback path (must match the Google console entry). */
 const GOOGLE_CALLBACK_PATH = "/api/auth/callback/google";
@@ -35,6 +38,25 @@ export async function GET() {
     const database = await getDatabaseStatus(true);
     const baseUrl = resolveServerBaseUrl() ?? resolvePublicBaseUrl();
     const secretConfigured = Boolean(process.env.BETTER_AUTH_SECRET?.trim());
+
+    // When the credentialed ping fails, find out *which stage* of the network
+    // journey fails (DNS SRV → TCP → TLS → wire protocol). Pure diagnostics:
+    // credential-free and only computed when MongoDB is not reachable.
+    let probe: ConnectivityProbe | undefined;
+    if (!database.reachable) {
+      try {
+        const result = await runConnectivityProbe();
+        probe = result;
+        console.warn(
+          `[QurbaniHat] MongoDB probe for ${database.target}: ` +
+            `srv=${result.srv?.ok ?? "?"} tcp=${result.tcp?.ok ?? "?"} ` +
+            `tls=${result.tls?.ok ?? "?"} ping=${result.ping?.ok ?? "?"} — ${result.verdict}`,
+        );
+      } catch (probeError) {
+        console.error("[QurbaniHat] MongoDB connectivity probe crashed:", probeError);
+        probe = { ran: false, verdict: "The staged connectivity probe itself failed — check server logs." };
+      }
+    }
 
     const checks = {
       mongodb: {
@@ -48,6 +70,8 @@ export async function GET() {
         target: database.target,
         db: database.database,
         detail: database.detail,
+        // Staged network diagnosis — present only when reachable is false.
+        probe,
       },
       betterAuth: {
         secretConfigured,
