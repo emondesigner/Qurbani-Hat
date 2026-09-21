@@ -1,6 +1,19 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { User } from '../types';
 import { toast } from 'sonner';
+
+/**
+ * Callbacks for the popup based Google OAuth flow.
+ *
+ * `onSuccess` fires once Google has authenticated the user (and the session has
+ * been stored), `onCancel` fires when the popup is closed or abandoned before
+ * that — so callers can always clear their loading state and redirect when
+ * appropriate instead of hanging on "Signing In...".
+ */
+export interface GoogleOAuthOptions {
+  onSuccess?: () => void;
+  onCancel?: () => void;
+}
 
 interface AuthContextType {
   user: User | null;
@@ -9,7 +22,7 @@ interface AuthContextType {
   signInWithEmail: (email: string, password: string) => Promise<boolean>;
   signUpWithEmail: (data: { name: string; email: string; image?: string; password: string }) => Promise<boolean>;
   signInWithGoogle: (googleProfile?: { id?: string; name?: string; email?: string; picture?: string }) => Promise<boolean>;
-  initiateGoogleOAuth: () => Promise<boolean>;
+  initiateGoogleOAuth: (options?: GoogleOAuthOptions) => Promise<boolean>;
   updateProfile: (data: { name: string; image: string }) => Promise<boolean>;
   signOut: () => Promise<void>;
 }
@@ -26,6 +39,10 @@ interface StoredUserAccount extends User {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Callbacks for the in-flight Google OAuth popup (set right before the
+  // popup opens, claimed by whichever terminal event arrives first).
+  const googleOAuthRef = useRef<GoogleOAuthOptions | null>(null);
 
   // Initialize session from storage, handle OAuth server redirect, and listen for popup messages
   useEffect(() => {
@@ -78,11 +95,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Listen for OAuth popup completion messages (Cross-origin popup flow)
     const handleOAuthMessage = (event: MessageEvent) => {
-      // Validate origin is from localhost or Cloud Run deployment
-      const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+      // The OAuth callback page is served by this very origin, so only accept
+      // session messages that originate from our own origin.
+      if (event.origin !== window.location.origin) {
         return;
       }
+
+      // Claim the pending callbacks immediately (synchronously) so the
+      // popup-close watcher cannot report a cancellation for a sign-in that
+      // actually succeeded.
+      const pending = googleOAuthRef.current;
+      googleOAuthRef.current = null;
 
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS' && event.data.session) {
         const userObj = event.data.session;
@@ -102,8 +125,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(USERS_STORE_KEY, JSON.stringify(registeredUsers));
 
         toast.success(`Signed in with Google as ${userObj.name}!`);
+        // Hand control back to the page that opened the popup so it can
+        // navigate to the dashboard.
+        pending?.onSuccess?.();
       } else if (event.data?.type === 'OAUTH_AUTH_ERROR') {
         toast.error(`Google Authentication Error: ${event.data.error || 'Failed'}`);
+        pending?.onCancel?.();
       }
     };
 
@@ -245,13 +272,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const initiateGoogleOAuth = async (): Promise<boolean> => {
+  const initiateGoogleOAuth = async (options?: GoogleOAuthOptions): Promise<boolean> => {
     try {
       const origin = window.location.origin;
       const res = await fetch(`/api/auth/google/url?origin=${encodeURIComponent(origin)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.url) {
+          // Register the callbacks BEFORE opening the popup so a very fast
+          // `postMessage` from the callback page is never missed.
+          googleOAuthRef.current = options ?? null;
+
           // Open the Google authorization URL directly in a popup window.
           // Note: In an iframe environment (like AI Studio preview), navigating window.location.assign
           // causes Google to return a 403 ("You do not have access to this document") because Google
@@ -270,6 +301,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!popup || popup.closed || typeof popup.closed === 'undefined') {
             // Popup was blocked by browser, open in new tab
             window.open(data.url, '_blank');
+          } else {
+            // If the user closes the popup without finishing (or Google
+            // returned an error page), release the pending callbacks so the
+            // "Continue with Google" button never stays stuck on loading.
+            const popupRef = popup;
+            const pollId = window.setInterval(() => {
+              if (popupRef.closed) {
+                window.clearInterval(pollId);
+                const pending = googleOAuthRef.current;
+                googleOAuthRef.current = null;
+                pending?.onCancel?.();
+              }
+            }, 700);
           }
           return true;
         }

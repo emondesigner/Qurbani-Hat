@@ -122,13 +122,23 @@ APP_URL=https://your-vercel-app.vercel.app
 **Google Cloud Console setup** (for OAuth credentials):
 1. Open <https://console.cloud.google.com/apis/credentials>.
 2. Click **+ CREATE CREDENTIALS → OAuth client ID**, Application type = **Web application**.
-3. Add the **Authorized JavaScript origin**: `http://localhost:3000`
-4. Add the **Authorized redirect URI** (must match exactly):
+3. Add the **Authorized JavaScript origins**:
+   ```
+   http://localhost:3000
+   http://127.0.0.1:3000
+   ```
+4. Add the **Authorized redirect URIs** (must match exactly, one per line):
    ```
    http://localhost:3000/api/auth/callback/google
+   http://127.0.0.1:3000/api/auth/callback/google
    ```
+   > The app sends `<window.location.origin>/api/auth/callback/google`.
+   > If you open the app on a different host (a LAN IP, a Vercel URL, a
+   > Cloud Run URL) you must register that origin too. Google answers
+   > `Error 400: redirect_uri_mismatch` for any URI that is not listed.
 5. Copy the Client ID into `GOOGLE_CLIENT_ID` and the Client Secret into
-   `GOOGLE_CLIENT_SECRET` inside `.env.local`, then restart `npm run dev`.
+   `GOOGLE_CLIENT_SECRET` inside `.env` (or `.env.local`) and restart
+   `npm run dev`.
 
 ---
 

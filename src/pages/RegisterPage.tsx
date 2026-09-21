@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { useRouter, Link } from '../lib/router-context';
+import { getGoogleRedirectUri } from '../lib/oauth';
 import { 
   User, 
   Mail, 
@@ -18,7 +19,7 @@ import {
 export function RegisterPage() {
   const { signUpWithEmail, signInWithGoogle, initiateGoogleOAuth } = useAuth();
   const { navigate, searchParams } = useRouter();
-  const redirectPath = searchParams.get('redirect') || '/login';
+  const redirectPath = searchParams.get('redirect') || '/';
 
   const [formData, setFormData] = useState({
     name: '',
@@ -33,8 +34,10 @@ export function RegisterPage() {
   const [showOAuthHelp, setShowOAuthHelp] = useState(false);
   const [copiedUri, setCopiedUri] = useState<string | null>(null);
 
-  const currentRedirectUri = `${window.location.origin}/api/auth/callback/google`;
-  const localhostRedirectUri = 'http://localhost:3000/api/auth/callback/google';
+  // Derived from the same shared helper the server uses, so the value shown
+  // here can never drift from the redirect_uri actually sent to Google.
+  const currentRedirectUri = getGoogleRedirectUri(window.location.origin);
+  const localhostRedirectUri = getGoogleRedirectUri('http://localhost:3000');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -84,7 +87,16 @@ export function RegisterPage() {
   const handleGoogleRegister = async () => {
     setError('');
     setIsGoogleSubmitting(true);
-    const initiated = await initiateGoogleOAuth();
+    const initiated = await initiateGoogleOAuth({
+      // Registering with Google signs the user straight in, so land on the
+      // requested page (home dashboard by default) rather than back on /login.
+      onSuccess: () => {
+        setIsGoogleSubmitting(false);
+        navigate(redirectPath);
+      },
+      // Popup closed / abandoned / provider error — just release the button.
+      onCancel: () => setIsGoogleSubmitting(false),
+    });
     if (!initiated) {
       setIsGoogleSubmitting(false);
     }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from '../lib/router-context';
 import { useAuth } from '../lib/auth-context';
+import { getCurrentGoogleRedirectUri } from '../lib/oauth';
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -8,6 +9,9 @@ export function AuthCallbackPage() {
   const { navigate, searchParams } = useRouter();
   const { signInWithGoogle } = useAuth();
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
+
+  // Same value the server sends to Google — never hardcoded here.
+  const expectedRedirectUri = getCurrentGoogleRedirectUri();
 
   useEffect(() => {
     // 1. Check for query error parameters (e.g. ?error=redirect_uri_mismatch)
@@ -96,8 +100,8 @@ export function AuthCallbackPage() {
           </div>
           <p className="text-xs text-slate-500">
             Ensure your Authorized redirect URI in Google Cloud Console is exactly:<br />
-            <code className="text-emerald-900 font-bold bg-emerald-50 px-2 py-0.5 rounded">
-              http://localhost:3000/api/auth/callback/google
+            <code className="text-emerald-900 font-bold bg-emerald-50 px-2 py-0.5 rounded break-all">
+              {expectedRedirectUri}
             </code>
           </p>
           <div className="pt-2 flex justify-center gap-3">

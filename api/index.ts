@@ -9,6 +9,74 @@ export const app = express();
 
 app.use(express.json());
 
+/**
+ * Canonical Google OAuth callback path.
+ *
+ * MUST stay byte-for-byte identical to:
+ *   - GOOGLE_CALLBACK_PATH in src/lib/oauth.ts
+ *   - the "Authorized redirect URIs" entry in Google Cloud Console
+ */
+const GOOGLE_CALLBACK_PATH = '/api/auth/callback/google';
+
+/** Hostnames that are always allowed to receive the OAuth callback. */
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * Only origins we control may be used as the OAuth redirect target.
+ *
+ * Without this check a crafted `?origin=` query value would make Google
+ * deliver the authorization code to an attacker-controlled host.
+ */
+function isAllowedOrigin(origin: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (LOCAL_HOSTNAMES.has(hostname)) return true;
+  if (hostname.endsWith('.run.app')) return true; // AI Studio / Cloud Run preview
+  if (hostname.endsWith('.vercel.app')) return true; // Vercel deployment
+
+  const appUrl = (process.env.APP_URL || '').trim();
+  if (appUrl) {
+    try {
+      if (new URL(appUrl).origin === parsed.origin) return true;
+    } catch {
+      // Ignore a malformed APP_URL and fall through to the default host.
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Resolves the redirect URI used for BOTH the Google authorization request and
+ * the server-side authorization-code exchange.
+ *
+ * Having a single implementation guarantees the two values can never drift
+ * apart — a drift is exactly what produces `Error 400: redirect_uri_mismatch`.
+ */
+function resolveRedirectUri(req: Request, requestedOrigin?: string): string {
+  const candidate = (requestedOrigin || '').trim().replace(/\/+$/, '');
+
+  if (candidate && isAllowedOrigin(candidate)) {
+    return `${candidate}${GOOGLE_CALLBACK_PATH}`;
+  }
+
+  const host = req.get('host') || 'localhost:3000';
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto) || req.protocol || 'http';
+
+  return `${protocol}://${host}${GOOGLE_CALLBACK_PATH}`;
+}
+
 // Health check
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -41,16 +109,13 @@ app.get('/api/auth/google/url', (req: Request, res: Response) => {
     });
   }
 
-  // Allow client to pass its exact origin (e.g. window.location.origin)
-  let redirectUri = '';
-  const clientOrigin = req.query.origin ? String(req.query.origin).trim().replace(/\/+$/, '') : '';
-  if (clientOrigin && (clientOrigin.startsWith('http://') || clientOrigin.startsWith('https://'))) {
-    redirectUri = `${clientOrigin}/api/auth/callback/google`;
-  } else {
-    const host = req.get('host') || 'localhost:3000';
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-    redirectUri = `${protocol}://${host}/api/auth/callback/google`;
-  }
+  // The client may pass its exact origin (window.location.origin). It is only
+  // honoured when it is an allow-listed host, so the redirect URI can never
+  // silently drift to a host that is not registered in Google Cloud Console.
+  const redirectUri = resolveRedirectUri(
+    req,
+    req.query.origin ? String(req.query.origin) : undefined
+  );
 
   const stateObj = {
     nonce: Math.random().toString(36).substring(2),
@@ -146,10 +211,10 @@ app.get('/api/auth/callback/google', async (req: Request, res: Response, next: N
       }
     }
 
+    // Fall back to the exact same helper used when building the authorization
+    // URL, so the value sent to /token always matches the one Google received.
     if (!redirectUri) {
-      const host = req.get('host') || 'localhost:3000';
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-      redirectUri = `${protocol}://${host}/api/auth/callback/google`;
+      redirectUri = resolveRedirectUri(req);
     }
 
     // 1. Exchange authorization code for tokens securely on the server

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { useRouter, Link } from '../lib/router-context';
+import { getGoogleRedirectUri } from '../lib/oauth';
 import { 
   Mail, 
   Lock, 
@@ -28,8 +29,10 @@ export function LoginPage() {
   const [showOAuthHelp, setShowOAuthHelp] = useState(false);
   const [copiedUri, setCopiedUri] = useState<string | null>(null);
 
-  const currentRedirectUri = `${window.location.origin}/api/auth/callback/google`;
-  const localhostRedirectUri = 'http://localhost:3000/api/auth/callback/google';
+  // Derived from the same shared helper the server uses, so the value shown
+  // here can never drift from the redirect_uri actually sent to Google.
+  const currentRedirectUri = getGoogleRedirectUri(window.location.origin);
+  const localhostRedirectUri = getGoogleRedirectUri('http://localhost:3000');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -66,7 +69,16 @@ export function LoginPage() {
   const handleGoogleLogin = async () => {
     setError('');
     setIsGoogleSubmitting(true);
-    const initiated = await initiateGoogleOAuth();
+    const initiated = await initiateGoogleOAuth({
+      // Google sign-in finished inside the popup: send the user to the page
+      // they originally asked for (the home dashboard by default).
+      onSuccess: () => {
+        setIsGoogleSubmitting(false);
+        navigate(redirectPath);
+      },
+      // Popup closed / abandoned / provider error — just release the button.
+      onCancel: () => setIsGoogleSubmitting(false),
+    });
     if (!initiated) {
       setIsGoogleSubmitting(false);
     }
