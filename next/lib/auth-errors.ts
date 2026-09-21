@@ -3,6 +3,10 @@
  *
  * The raw backend error is logged to the console for developers but never
  * rendered in the UI — no stack traces, no internal detail, no status codes.
+ *
+ * Related modules:
+ *   lib/auth-guard.ts — answers `DATABASE_UNAVAILABLE` when MongoDB is down.
+ *   lib/mongodb.ts    — supplies the credential-free `detail` for that code.
  */
 
 const CODE_MESSAGES: Record<string, string> = {
@@ -20,6 +24,18 @@ const CODE_MESSAGES: Record<string, string> = {
   FAILED_TO_CREATE_SESSION: "We could not start your session. Please try again.",
   ACCOUNT_NOT_LINKED:
     "This email is already registered with a password. Please log in with your email and password instead.",
+
+  // --- Infrastructure failures -------------------------------------------------
+  // MongoDB unreachable. Better Auth answers this case with a *bodyless* 500, so
+  // without an explicit entry the UI could only show a vague generic error.
+  // Emitted by lib/auth-guard.ts.
+  DATABASE_UNAVAILABLE:
+    "Sign-in is temporarily unavailable: the server cannot reach its database. Please try again shortly.",
+  // Any other unexpected 5xx.
+  SERVER_ERROR: "Something went wrong on the server. Please try again in a moment.",
+  // Better Auth rejects requests whose Origin is not in `trustedOrigins`.
+  INVALID_ORIGIN:
+    "This site's address is not allowed to sign in. Please open the site on its official domain and try again.",
 };
 
 const MESSAGE_HINTS: { match: RegExp; message: string }[] = [
@@ -45,7 +61,7 @@ function readError(error: unknown): ErrorLike {
 }
 
 export function friendlyAuthError(error: unknown, fallback: string): string {
-  const { message, code } = readError(error);
+  const { message, code, status } = readError(error);
 
   // Developer-facing detail stays in the console only.
   if (process.env.NODE_ENV !== "production") {
@@ -67,6 +83,13 @@ export function friendlyAuthError(error: unknown, fallback: string): string {
     if (message.length > 0 && message.length <= 120 && !message.includes("\n")) {
       return message;
     }
+  }
+
+  // A 5xx with an empty body is how an infrastructure failure reaches the
+  // browser (Better Auth cannot serialise the driver error). Reporting the
+  // generic fallback in that case is misleading — say it is a server problem.
+  if (typeof status === "number" && status >= 500) {
+    return CODE_MESSAGES.SERVER_ERROR;
   }
 
   return fallback;

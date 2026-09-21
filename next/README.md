@@ -2,7 +2,7 @@
 
 **Assignment Category**: `category-A8-Pineapple`
 
-**Live URL**: `https://your-live-url.vercel.app` *(update after Vercel deployment)*
+**Live URL**: `https://qurbanihat-next.vercel.app`
 **Vite version (existing work)**: see the repository-root `README.md`
 
 ---
@@ -115,7 +115,47 @@ MongoDB (native driver via Better Auth adapter) · Google OAuth · Sonner · Rea
 2. Add the production env vars (`BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` =
    `https://<your-domain>`, plus `MONGODB_URI`, `BETTER_AUTH_SECRET`,
    `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`).
-3. Atlas: allow Vercel IPs (or `0.0.0.0/0` for the assignment) under Network Access.
+3. Atlas: allow the deployment's IPs under **Network Access** (Vercel functions
+   use dynamic egress IPs, so the assignment cluster uses `0.0.0.0/0`). If this
+   step is missed, every auth endpoint fails *before* Google is contacted and
+   `/api/health` reports `mongodb.reachable: false`.
 4. Google Console: add the production origin and
    `https://<your-domain>/api/auth/callback/google` redirect.
-5. Deploy, then replace the Live URL placeholder at the top of this file.
+5. Deploy, then confirm the Live URL at the top of this file and check
+   `/api/health` (see below).
+
+## 9. Troubleshooting sign-in
+
+`GET /api/health` on any deployment reports the state of the whole auth chain and
+exposes **no secrets**. Open `https://<your-domain>/api/health` first whenever
+sign-in fails — it names the exact failing step.
+
+| Reported state                                  | Meaning                                                     | Fix                                                                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `mongodb.reachable: false`                      | Better Auth cannot reach MongoDB, so **every** auth endpoint fails before Google is contacted | Set `MONGODB_URI` / `MONGODB_DB` in Vercel → Settings → Environment Variables, and allow the deployment's IP in Atlas → Network Access |
+| `betterAuth.secretConfigured: false`            | `BETTER_AUTH_SECRET` is missing                             | Add a 32-byte hex secret to the production env vars                                                                         |
+| `google.credentialsConfigured: false`           | the Google button stays hidden                              | Add `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` (server-side only — never `NEXT_PUBLIC_*`)                                  |
+| Google answers `redirect_uri_mismatch`          | the redirect URI Better Auth sends is not registered        | Copy `google.expectedRedirectUri` from `/api/health` **verbatim** into Google Cloud Console → Credentials → OAuth 2.0 Client ID → Authorized redirect URIs, and its origin into Authorized JavaScript origins |
+
+### Why a database outage used to look like an OAuth bug
+
+When MongoDB is unreachable, Better Auth logs the driver error server-side and
+answers with an **empty-bodied HTTP 500**. The browser therefore receives no
+`message` at all, so the UI could only show a generic "we could not start Google
+sign-in" and the Google consent screen was never reached — even though the OAuth
+client was configured correctly. Diagnosis is now explicit:
+
+- `lib/auth-guard.ts` pings MongoDB (cached) before delegating a database-backed
+  auth route and answers `503 DATABASE_UNAVAILABLE` with an actionable message.
+- `app/api/auth/[...all]/route.ts` converts any remaining empty 5xx response
+  into JSON, so the client always has something useful to display.
+- `lib/auth.ts` (`onAPIError.onError`) writes a credential-free explanation to the
+  function logs, and `/api/health` exposes the same summary to the developer.
+
+### Base URLs
+
+`lib/app-url.ts` is the single source of truth for every browser-facing URL. A
+`localhost` value can never win on a hosted runtime: a `BETTER_AUTH_URL` /
+`NEXT_PUBLIC_APP_URL` pointing at a loopback address is ignored in favour of the
+deployment's own origin, so the OAuth `redirect_uri` always matches the live
+domain and a locally-copied `.env` can never break production.

@@ -18,6 +18,7 @@ next-env.d.ts
 # Misc
 .DS_Store
 *.pem
+*.pid
 npm-debug.log*
 
 # Local logs (dev server / build output captures)

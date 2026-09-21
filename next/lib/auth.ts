@@ -4,7 +4,7 @@ import { nextCookies } from "better-auth/next-js";
 
 import { buildTrustedOrigins, resolveServerBaseUrl } from "@/lib/app-url";
 import { googleCredentials } from "@/lib/auth-flags";
-import { getMongoClient, getMongoDb } from "@/lib/mongodb";
+import { getMongoClient, getMongoDb, summarizeError } from "@/lib/mongodb";
 
 /**
  * Server-side Better Auth instance (never imported by client components).
@@ -40,6 +40,20 @@ export const auth = betterAuth({
     autoSignIn: false,
   },
   socialProviders: googleCredentials ? { google: googleCredentials } : undefined,
+  /**
+   * Better Auth answers an unexpected server failure with a *bodyless* 500, so
+   * the cause never reaches the browser. This hook writes a credential-free
+   * explanation to the server logs (Vercel → Deployments → Functions → Logs),
+   * which makes the failing step of the OAuth start identifiable in production.
+   */
+  onAPIError: {
+    onError: (error: unknown) => {
+      console.error(
+        `[QurbaniHat] Better Auth server error: ${summarizeError(error)}. ` +
+          `Open /api/health for the current database and Google provider status.`,
+      );
+    },
+  },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // refresh the cookie once per day

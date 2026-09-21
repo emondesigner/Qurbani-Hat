@@ -12,29 +12,62 @@
  * `normalizeBrowsableUrl()`, which rewrites socket-only hosts such as
  * `0.0.0.0`, `::` and `127.0.0.1` to `localhost` while preserving the port.
  *
- * Production is unaffected: on Vercel the real values come from
- * BETTER_AUTH_URL / NEXT_PUBLIC_APP_URL / VERCEL_PROJECT_PRODUCTION_URL, none of
- * which contain a wildcard host.
+ * Production safety
+ * -----------------
+ * `NEXT_PUBLIC_*` values are inlined at build time, and a `.env.local` copied
+ * straight into a hosting dashboard is the classic way to break a deployment.
+ * A loopback value can therefore NEVER win on a hosted runtime:
+ *   - `resolveServerBaseUrl()` ignores `http://localhost:...` and uses the
+ *     deployment's own origin instead, so the OAuth `redirect_uri` sent to
+ *     Google always matches the live domain;
+ *   - `resolveBrowserBaseUrl()` returns `undefined` for such a value, letting
+ *     the Better Auth client infer the correct `window.location.origin`.
  */
 
 /** Local development fallback (the port used by `npm run dev`). */
 export const DEFAULT_DEV_URL = "http://localhost:3000";
 
-/** Hosts that are valid for socket binding/loopback but never for navigation. */
-const NON_BROWSABLE_HOSTNAMES = new Set(["0.0.0.0", "::", "[::]", "127.0.0.1"]);
+/** Hosts that exist for socket binding only and are never valid to navigate to. */
+const BIND_ONLY_HOSTNAMES = new Set(["0.0.0.0", "::", "[::]", "127.0.0.1"]);
+
+/** Every hostname that only makes sense on the machine running the server. */
+const LOOPBACK_HOSTNAMES = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  ...BIND_ONLY_HOSTNAMES,
+]);
 
 let hasWarned = false;
 
+/**
+ * Deployment warnings go to the server console (Vercel → Deployments →
+ * Functions → Logs). They are always emitted, including in production, because
+ * a misconfigured base URL is otherwise completely silent.
+ */
 function warnOnce(message: string) {
   if (hasWarned) return;
   hasWarned = true;
-  if (process.env.NODE_ENV !== "production") {
-    console.warn(`[QurbaniHat] ${message}`);
-  }
+  console.warn(`[QurbaniHat] ${message}`);
 }
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+export function isLoopbackHostname(hostname: string): boolean {
+  return LOOPBACK_HOSTNAMES.has(hostname);
+}
+
+/** True when the app is running on Vercel (or any configured hosted runtime). */
+export function isHostedRuntime(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.VERCEL_ENV ||
+      process.env.VERCEL_URL ||
+      process.env.VERCEL_PROJECT_PRODUCTION_URL,
+  );
 }
 
 /**
@@ -59,7 +92,7 @@ export function normalizeBrowsableUrl(raw?: string | null): string | undefined {
     return undefined;
   }
 
-  if (NON_BROWSABLE_HOSTNAMES.has(parsed.hostname)) {
+  if (BIND_ONLY_HOSTNAMES.has(parsed.hostname)) {
     const original = parsed.hostname;
     parsed.hostname = "localhost";
     warnOnce(
@@ -71,31 +104,70 @@ export function normalizeBrowsableUrl(raw?: string | null): string | undefined {
   return stripTrailingSlash(parsed.toString());
 }
 
-/** Vercel injects the deployment hostname without a protocol. */
-function vercelOrigin(): string | undefined {
-  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  if (production) return `https://${production.replace(/^https?:\/\//, "")}`;
-  const preview = process.env.VERCEL_URL?.trim();
-  if (preview) return `https://${preview.replace(/^https?:\/\//, "")}`;
-  return undefined;
+/** True when the URL points at the machine running the server. */
+function isLoopbackUrl(value: string): boolean {
+  try {
+    return isLoopbackHostname(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Vercel injects hostnames without a protocol. */
+function toHttpsOrigin(value?: string): string | undefined {
+  const host = value?.trim();
+  if (!host) return undefined;
+  if (host.startsWith("http://") || host.startsWith("https://")) {
+    return stripTrailingSlash(host);
+  }
+  return `https://${host}`;
 }
 
 /**
- * Base URL for server-side auth decisions (OAuth callback URLs).
- * Returns `undefined` when nothing is configured, in which case Better Auth
- * falls back to the origin of the incoming request — the safest behaviour for
- * preview deployments.
+ * The origin of this deployment as Vercel reports it.
+ *
+ * `VERCEL_URL` is the hostname of the deployment currently serving the
+ * request, so previews keep their OAuth callback on their own domain, while a
+ * production deployment always advertises its stable production domain.
+ */
+function vercelOrigin(): string | undefined {
+  const preview = toHttpsOrigin(process.env.VERCEL_URL);
+  const production = toHttpsOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL);
+
+  if (process.env.VERCEL_ENV === "production") return production ?? preview;
+  return preview ?? production;
+}
+
+/**
+ * Base URL for server-side auth decisions (OAuth `redirect_uri`, trusted
+ * origins, metadata). Returns `undefined` when nothing is configured, in which
+ * case Better Auth falls back to the origin of the incoming request — the
+ * safest behaviour for an unrecognised environment.
+ *
+ * On a hosted runtime the deployment's own origin is authoritative and any
+ * loopback candidate is skipped: a copied `BETTER_AUTH_URL=http://localhost:3000`
+ * would otherwise be sent to Google and rejected with `redirect_uri_mismatch`.
  */
 export function resolveServerBaseUrl(): string | undefined {
-  const candidates: (string | undefined)[] = [
-    process.env.BETTER_AUTH_URL,
-    process.env.NEXT_PUBLIC_APP_URL,
-    vercelOrigin(),
-  ];
+  const hosted = isHostedRuntime();
+
+  const candidates: (string | undefined)[] = hosted
+    ? [vercelOrigin(), process.env.BETTER_AUTH_URL, process.env.NEXT_PUBLIC_APP_URL]
+    : [process.env.BETTER_AUTH_URL, process.env.NEXT_PUBLIC_APP_URL, vercelOrigin()];
 
   for (const candidate of candidates) {
     const normalized = normalizeBrowsableUrl(candidate);
-    if (normalized) return normalized;
+    if (!normalized) continue;
+
+    if (hosted && isLoopbackUrl(normalized)) {
+      warnOnce(
+        `Ignoring "${normalized}" as the app base URL — this deployment is hosted, so a ` +
+          `loopback address cannot be reached by a browser. Using the deployment origin instead.`,
+      );
+      continue;
+    }
+
+    return normalized;
   }
 
   return undefined;
@@ -108,17 +180,35 @@ export function resolvePublicBaseUrl(): string {
 
 /**
  * Base URL for the browser-side Better Auth client.
+ *
  * Returning `undefined` lets the client infer `window.location.origin`, so a
  * deployment can never be pointed at the wrong host by a stale env value.
+ * A `NEXT_PUBLIC_APP_URL` that was inlined as a loopback address at build time
+ * is discarded when the page is not itself served from loopback.
  */
 export function resolveBrowserBaseUrl(): string | undefined {
-  return normalizeBrowsableUrl(process.env.NEXT_PUBLIC_APP_URL);
+  const normalized = normalizeBrowsableUrl(process.env.NEXT_PUBLIC_APP_URL);
+  if (!normalized) return undefined;
+
+  if (typeof window !== "undefined" && isLoopbackUrl(normalized)) {
+    const servedFrom = window.location.hostname;
+    if (!isLoopbackHostname(servedFrom)) {
+      console.warn(
+        `[QurbaniHat] NEXT_PUBLIC_APP_URL="${normalized}" points at a loopback address but this ` +
+          `page is served from "${servedFrom}". Using window.location.origin instead.`,
+      );
+      return undefined;
+    }
+  }
+
+  return normalized;
 }
 
 /**
  * Origins allowed to call `/api/auth/*` (CSRF protection).
- * Always includes the resolved public origin plus the canonical local pairs, so
- * `localhost` and `127.0.0.1` both work during development.
+ * Always includes the resolved public origin. Loopback pairs are only trusted
+ * while the app is genuinely served from a local machine — on a hosted
+ * deployment they would needlessly widen the allow-list.
  *
  * Vercel preview deployments live on a random subdomain (`<hash>.vercel.app`),
  * so the per-deployment VERCEL_URL and the project production domain are
@@ -141,16 +231,20 @@ export function buildTrustedOrigins(): string[] {
     }
   }
 
-  origins.add("http://localhost:3000");
-  origins.add("http://127.0.0.1:3000");
+  const production = toHttpsOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL);
+  if (production) origins.add(production);
 
-  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  if (production) {
-    origins.add(`https://${production.replace(/^https?:\/\//, "").replace(/\/+$/, "")}`);
-  }
-  const preview = process.env.VERCEL_URL?.trim();
-  if (preview) {
-    origins.add(`https://${preview.replace(/^https?:\/\//, "").replace(/\/+$/, "")}`);
+  const preview = toHttpsOrigin(process.env.VERCEL_URL);
+  if (preview) origins.add(preview);
+
+  // Path A — an origin for the real deployment was found: loopback is not needed.
+  const hasHostedOrigin = Array.from(origins).some((origin) => !isLoopbackUrl(origin));
+  if (!hasHostedOrigin) {
+    // Path B — no hosted origin could be resolved, so keep local development
+    // working (never return an empty allow-list, which would reject every
+    // cross-origin auth request).
+    origins.add(DEFAULT_DEV_URL);
+    origins.add("http://127.0.0.1:3000");
   }
 
   return Array.from(origins);
