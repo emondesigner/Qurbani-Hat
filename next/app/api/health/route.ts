@@ -33,6 +33,14 @@ export const maxDuration = 30;
 /** Better Auth's Google callback path (must match the Google console entry). */
 const GOOGLE_CALLBACK_PATH = "/api/auth/callback/google";
 
+/**
+ * Commit this deployment was built from (Vercel injects VERCEL_GIT_COMMIT_SHA;
+ * falls back to "local" for `next dev` / `next build` on a workstation).
+ * Lets /api/health prove whether production is actually running the latest
+ * commit instead of guessing from probe message text.
+ */
+const BUILD_SHA = (process.env.VERCEL_GIT_COMMIT_SHA || "local").slice(0, 12);
+
 export async function GET() {
   try {
     const database = await getDatabaseStatus(true);
@@ -86,7 +94,7 @@ export async function GET() {
     const ok = database.reachable && secretConfigured;
 
     return NextResponse.json(
-      { ok, checks, timestamp: new Date().toISOString() },
+      { ok, buildSha: BUILD_SHA, checks, timestamp: new Date().toISOString() },
       { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
