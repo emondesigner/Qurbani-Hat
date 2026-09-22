@@ -41,8 +41,19 @@ declare global {
 }
 
 function readUri(): string | undefined {
-  const uri = process.env.MONGODB_URI?.trim();
-  return uri && uri.length > 0 ? uri : undefined;
+  let uri = process.env.MONGODB_URI?.trim();
+  if (!uri) return undefined;
+  // Vercel dashboard pastes often keep the surrounding quotes from a .env
+  // line (e.g. MONGODB_URI="mongodb+srv://..."). The driver then sees a
+  // scheme of `"mongodb+srv:` and throws MongoParseError / server-selection
+  // failures on serverless while local .env parsing strips the quotes.
+  if (
+    (uri.startsWith('"') && uri.endsWith('"')) ||
+    (uri.startsWith("'") && uri.endsWith("'"))
+  ) {
+    uri = uri.slice(1, -1).trim();
+  }
+  return uri.length > 0 ? uri : undefined;
 }
 
 /**
@@ -94,8 +105,17 @@ export function getDatabaseName(): string {
  * this is always safe to print.
  */
 export function maskMongoTarget(uri?: string | null): string {
-  const value = (uri ?? readUri())?.trim();
+  let value = (uri ?? readUri())?.trim();
   if (!value) return "unset";
+  // A quoted value pasted into the dashboard must still produce a readable
+  // label instead of "unparsable".
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1).trim();
+    if (!value) return "unset";
+  }
   try {
     const parsed = new URL(value);
     const db = parsed.pathname.replace(/^\//, "");

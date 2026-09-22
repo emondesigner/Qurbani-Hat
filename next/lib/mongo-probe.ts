@@ -65,8 +65,22 @@ interface ParsedTarget {
   database: string;
 }
 
+function readRawUri(): string | null {
+  let raw = process.env.MONGODB_URI?.trim();
+  if (!raw) return null;
+  // Same quote-stripping as lib/mongodb.ts readUri(): a Vercel paste that
+  // keeps surrounding quotes must not break diagnostics either.
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    raw = raw.slice(1, -1).trim();
+  }
+  return raw.length > 0 ? raw : null;
+}
+
 function parseMongoTarget(): ParsedTarget | null {
-  const raw = process.env.MONGODB_URI?.trim();
+  const raw = readRawUri();
   if (!raw) return null;
   try {
     const parsed = new URL(raw);
