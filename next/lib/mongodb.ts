@@ -169,10 +169,23 @@ export function describeMongoFailure(error: unknown): {
         "the connection was refused — nothing is listening at that address (usually a missing MONGODB_URI, which falls back to a local address that does not exist on a serverless host)",
     };
   }
-  if (/querySrv|ENOTFOUND|ESERVFAIL|EAI_AGAIN/i.test(text)) {
+  if (/querySrv|ESERVFAIL|EAI_AGAIN/i.test(text)) {
     return {
       kind: "dns",
       detail: "the MongoDB hostname could not be resolved (DNS / SRV lookup failed)",
+    };
+  }
+  if (/ENOTFOUND/i.test(text)) {
+    // NOTE: a bare `getaddrinfo ENOTFOUND cluster0.x.mongodb.net` from the raw
+    // TCP probe used to be a false alarm — the SRV parent name has no A record
+    // by design and only the shard hosts resolve. The staged probe now dials the
+    // resolved shard endpoint, so an ENOTFOUND that reaches the DRIVER means the
+    // deployment's DNS really cannot resolve Atlas (not a Network Access block:
+    // a blocked IP times out instead of failing DNS).
+    return {
+      kind: "dns",
+      detail:
+        "the MongoDB hostname could not be resolved (DNS / SRV lookup failed) — on Vercel this is a DNS failure, not an IP-allowlist block (a blocked IP times out instead)",
     };
   }
   if (/Authentication failed|bad auth|SCRAM|not authorized/i.test(text)) {

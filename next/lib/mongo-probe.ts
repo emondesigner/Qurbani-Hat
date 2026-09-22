@@ -104,6 +104,18 @@ async function withTimeout<T>(
   }
 }
 
+/** Splits `host:port` (an SRV target or seed-list entry) into diallable parts. */
+function splitEndpoint(endpoint: string, fallbackPort: number): { host: string; port: number } {
+  const trimmed = endpoint.trim();
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > -1) {
+    const port = Number(trimmed.slice(lastColon + 1));
+    if (Number.isFinite(port) && port > 0) {
+      return { host: trimmed.slice(0, lastColon), port };
+    }
+  }
+  return { host: trimmed, port: fallbackPort };
+}
 
 /** Raw TCP connect (no TLS) to `endpoint`. Resolves true/false, never throws. */
 function tryTcp(host: string, port: number): Promise<{ ok: boolean; detail: string; ms: number }> {
@@ -217,8 +229,11 @@ export async function runConnectivityProbe(): Promise<ConnectivityProbe> {
     probe.srv = { ok: true, skipped: true, detail: "URI is a standard seed-list (no SRV lookup needed)" };
   }
 
-  // Stage 2 — raw TCP.
-  const tcp = await tryTcp(target.hostname, target.port);
+  // Stage 2 — raw TCP against the REAL shard endpoint, not the SRV parent name.
+  // `cluster0.x.mongodb.net` is SRV-only (no A record by design), so dialling it
+  // directly always fails with ENOTFOUND even when Atlas is perfectly healthy.
+  const { host: tcpHost, port: tcpPort } = splitEndpoint(endpoint, target.port);
+  const tcp = await tryTcp(tcpHost, tcpPort);
   probe.tcp = { ok: tcp.ok, detail: tcp.detail, ms: tcp.ms, endpoint };
   if (!tcp.ok) {
     probe.tls = { ok: false, skipped: true, detail: "skipped (TCP failed)" };
@@ -231,8 +246,8 @@ export async function runConnectivityProbe(): Promise<ConnectivityProbe> {
     return probe;
   }
 
-  // Stage 3 — TLS.
-  const tlsResult = await tryTls(target.hostname, target.port);
+  // Stage 3 — TLS against the same shard endpoint.
+  const tlsResult = await tryTls(tcpHost, tcpPort);
   probe.tls = { ok: tlsResult.ok, detail: tlsResult.detail, ms: tlsResult.ms, endpoint };
   if (!tlsResult.ok) {
     probe.ping = { ok: false, skipped: true, detail: "skipped (TLS failed)" };
